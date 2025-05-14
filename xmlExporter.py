@@ -344,12 +344,56 @@ class XmlExporterGUI:
         nav_frame.grid(row=0, column=0, sticky='ew', pady=5)
         nav_frame.grid_columnconfigure(1, weight=1)
 
-        prev_button = ttk.Button(nav_frame, text="Previous", command=lambda: prev_page())
-        page_label = ttk.Label(nav_frame, text="Page 1/1")
-        next_button = ttk.Button(nav_frame, text="Next", command=lambda: next_page())
+        # Dropdown for field selection
+        field_names = []
+        field_data = []
+        
+        for path in self.selected_fields:
+            msg_type, instance_id, field = path.split('/')
+            data = self.message_data[msg_type][instance_id]
+            times = data['times']
+            values = data['data'][field]
+            if len(times) == len(values):
+                field_names.append(f"{msg_type} (ID {instance_id}) - {field}")
+                field_data.append({
+                    'times': times,
+                    'values': values,
+                    'title': f"{msg_type} (ID {instance_id})\n{field}",
+                    'xlabel': "Time (s)",
+                    'ylabel': field
+                })
 
+        if not field_data:
+            messagebox.showwarning("No Data", "No valid data to display.")
+            preview_win.destroy()
+            return
+
+        current_index = 0
+        
+        field_var = tk.StringVar(value=field_names[0])
+        field_dropdown = ttk.Combobox(
+            nav_frame, 
+            textvariable=field_var, 
+            values=field_names,
+            state="readonly",
+            width=80
+        )
+        field_dropdown.grid(row=0, column=1, padx=5, sticky='ew')
+
+        prev_button = ttk.Button(
+            nav_frame, 
+            text="◄ Previous", 
+            command=lambda: navigate(-1),
+            width=10
+        )
         prev_button.grid(row=0, column=0, padx=5)
-        page_label.grid(row=0, column=1)
+
+        next_button = ttk.Button(
+            nav_frame, 
+            text="Next ►", 
+            command=lambda: navigate(1),
+            width=10
+        )
         next_button.grid(row=0, column=2, padx=5)
 
         # Matplotlib Figure
@@ -357,80 +401,171 @@ class XmlExporterGUI:
         canvas = FigureCanvasTkAgg(fig, master=preview_win)
         canvas.get_tk_widget().grid(row=1, column=0, sticky='nsew')
 
-        # Data preparation
-        plot_data = []
-        for path in self.selected_fields:
-            msg_type, instance_id, field = path.split('/')
-            data = self.message_data[msg_type][instance_id]
-            times = data['times']
-            values = data['data'][field]
-            if len(times) == len(values):
-                plot_data.append({
-                    'times': times,
-                    'values': values,
-                    'title': f"{msg_type} (ID {instance_id})\n{field}"
-                })
+        # Status label for plot info
+        status_frame = ttk.Frame(preview_win)
+        status_frame.grid(row=2, column=0, sticky='ew', pady=5)
+        
+        plot_info = ttk.Label(status_frame, text=f"Plot 1 of {len(field_data)}")
+        plot_info.pack(side='left', padx=10)
 
-        # Pagination variables
-        grid_rows = 3
-        grid_cols = 3
-        plots_per_page = grid_rows * grid_cols
-        total_pages = (len(plot_data) + plots_per_page - 1) // plots_per_page
-        current_page = 0
+        cursor_label = ttk.Label(status_frame, text="")
+        cursor_label.pack(side='right', padx=10)
 
-        def plot_page():
-            nonlocal current_page
+        # Zoom variables
+        zoom_stack = []
+        zoom_rect = None
+        zoom_start = None
+
+        def plot_current():
+            nonlocal current_index
+            data = field_data[current_index]
             fig.clear()
-            start_idx = current_page * plots_per_page
-            end_idx = min(start_idx + plots_per_page, len(plot_data))
-            current_plots = plot_data[start_idx:end_idx]
-
-            for i, plot in enumerate(current_plots):
-                ax = fig.add_subplot(grid_rows, grid_cols, i+1)
-                ax.plot(plot['times'], plot['values'], 'b-')
-                ax.set_title(plot['title'], fontsize=8)
-                ax.set_xlabel("Time (s)", fontsize=6)
-                ax.grid(True)
-                ax.tick_params(labelsize=6)
-                ax.format_coord = lambda x, y: f'Time: {x:.2f}s, Value: {y:.2f}'
-
+            ax = fig.add_subplot(111)
+            ax.plot(data['times'], data['values'], 'b-')
+            ax.set_title(data['title'], fontsize=10)
+            ax.set_xlabel(data['xlabel'], fontsize=9)
+            ax.set_ylabel(data['ylabel'], fontsize=9)
+            ax.grid(True)
             fig.tight_layout()
             canvas.draw()
-            page_label.config(text=f"Page {current_page+1}/{total_pages}")
-            prev_button["state"] = "normal" if current_page > 0 else "disabled"
-            next_button["state"] = "normal" if current_page < total_pages-1 else "disabled"
+            field_var.set(field_names[current_index])
+            plot_info.config(text=f"Plot {current_index + 1} of {len(field_data)}")
+            prev_button["state"] = "normal" if current_index > 0 else "disabled"
+            next_button["state"] = "normal" if current_index < len(field_data)-1 else "disabled"
 
-        def prev_page():
-            nonlocal current_page
-            if current_page > 0:
-                current_page -= 1
-                plot_page()
+            # Reconnect zoom events
+            canvas.mpl_connect('button_press_event', on_press)
+            canvas.mpl_connect('button_release_event', on_release)
+            canvas.mpl_connect('motion_notify_event', update_cursor)
 
-        def next_page():
-            nonlocal current_page
-            if current_page < total_pages - 1:
-                current_page += 1
-                plot_page()
+        def navigate(step):
+            nonlocal current_index
+            new_index = current_index + step
+            if 0 <= new_index < len(field_data):
+                current_index = new_index
+                plot_current()
 
-        # Initial plot
-        plot_page()
-        if total_pages <= 1:
-            prev_button.grid_remove()
-            page_label.grid_remove()
-            next_button.grid_remove()
+        def on_dropdown_select(event):
+            nonlocal current_index
+            selected = field_dropdown.current()
+            if selected >= 0 and selected != current_index:
+                current_index = selected
+                plot_current()
 
-        # Cursor coordinates
+        def on_press(event):
+            nonlocal zoom_start, zoom_rect
+            
+            if event.button == 1:  # Left mouse button
+                if event.inaxes:
+                    zoom_start = (event.xdata, event.ydata)
+                    if zoom_rect:
+                        zoom_rect.remove()
+                    zoom_rect = plt.Rectangle(
+                        (event.xdata, event.ydata), 
+                        0, 0, 
+                        fill=False, 
+                        linestyle='dashed', 
+                        color='red'
+                    )
+                    event.inaxes.add_patch(zoom_rect)
+                    canvas.draw()
+            elif event.button == 3:  # Right mouse button
+                reset_zoom()
+
+        def on_release(event):
+            nonlocal zoom_start, zoom_rect, zoom_stack
+            
+            if event.button == 1 and zoom_start and zoom_rect and event.inaxes:  # Left mouse button
+                x0, y0 = zoom_start
+                x1, y1 = event.xdata, event.ydata
+                
+                if x1 is None or y1 is None:
+                    if zoom_rect:
+                        zoom_rect.remove()
+                        zoom_rect = None
+                    zoom_start = None
+                    canvas.draw()
+                    return
+                    
+                # Ensure x0 < x1 and y0 < y1
+                x_min, x_max = min(x0, x1), max(x0, x1)
+                y_min, y_max = min(y0, y1), max(y0, y1)
+                
+                # Check if the zoom area is too small
+                if abs(x_max - x_min) < 1e-10:
+                    x_max = x_min + 1e-10
+                if abs(y_max - y_min) < 1e-10:
+                    y_max = y_min + 1e-10
+                
+                # Store current view limits
+                ax = fig.axes[0]
+                zoom_stack.append((ax.get_xlim(), ax.get_ylim()))
+                
+                # Apply new zoom
+                ax.set_xlim(x_min, x_max)
+                ax.set_ylim(y_min, y_max)
+                
+                # Remove rectangle
+                if zoom_rect:
+                    zoom_rect.remove()
+                    zoom_rect = None
+                zoom_start = None
+                canvas.draw()
+
+        def reset_zoom():
+            nonlocal zoom_stack
+            
+            if zoom_rect:
+                zoom_rect.remove()
+            
+            if zoom_stack:
+                ax = fig.axes[0]
+                xlim, ylim = zoom_stack[-1]
+                ax.set_xlim(xlim)
+                ax.set_ylim(ylim)
+                zoom_stack.pop()
+                canvas.draw()
+            else:
+                # Reset to full view
+                ax = fig.axes[0]
+                ax.relim()
+                ax.autoscale_view()
+                canvas.draw()
+
         def update_cursor(event):
+            nonlocal zoom_start, zoom_rect
+            
+            if zoom_start and zoom_rect and event.inaxes:
+                # Update zoom rectangle
+                x0, y0 = zoom_start
+                x1, y1 = event.xdata, event.ydata
+                
+                if x1 is None or y1 is None:
+                    return
+                
+                # Calculate width and height
+                width = x1 - x0
+                height = y1 - y0
+                
+                # Update rectangle position and size
+                x = min(x0, x1)
+                y = min(y0, y1)
+                zoom_rect.set_xy((x, y))
+                zoom_rect.set_width(abs(width))
+                zoom_rect.set_height(abs(height))
+                canvas.draw()
+            
             if event.inaxes:
                 x, y = event.xdata, event.ydata
-                if x and y:
-                    preview_win.cursor_label.config(text=f'Time: {x:.2f}s, Value: {y:.2f}')
+                if x is not None and y is not None:
+                    cursor_label.config(text=f'Time: {x:.2f}s, Value: {y:.2f}')
             else:
-                preview_win.cursor_label.config(text="")
+                cursor_label.config(text="")
 
-        preview_win.cursor_label = ttk.Label(preview_win, text="")
-        preview_win.cursor_label.grid(row=2, column=0, sticky='se', padx=10, pady=5)
-        canvas.mpl_connect('motion_notify_event', update_cursor)
+        field_dropdown.bind('<<ComboboxSelected>>', on_dropdown_select)
+
+        # Initial plot
+        plot_current()
     
     def export_favorite(self):
         if not self.selected_fields:

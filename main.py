@@ -18,7 +18,7 @@ def resource_path(relative_path):
 class MavlinkLauncherGUI:
     def __init__(self, master):
         self.master = master
-        master.title("MAVLink Data Plotter (version 1.1)")
+        master.title("MAVLink Data Plotter (version 1.2)")
         master.geometry("350x200")
         master.grid_rowconfigure(0, weight=1)
         master.grid_columnconfigure(0, weight=1)
