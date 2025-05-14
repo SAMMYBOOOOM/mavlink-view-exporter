@@ -1,7 +1,7 @@
 # MAVLink View-Exporter
 MAVLink View-Exporter Screenshot
 
-<img src="https://github.com/SAMMYBOOOOM/mavlink-view-exporter/blob/master/image/image.png" width="500">
+<img src="https://github.com/SAMMYBOOOOM/mavlink-view-exporter/blob/main/image/image.png" width="500">
 
 ## Overview
 MAVLink View-Exporter is a Python-based graphical tool for visualizing and exporting MAVLink telemetry data from `.tlog` files. The application provides:
@@ -95,7 +95,7 @@ This project is licensed under the GNU General Public License v2.0 - see the LIC
 ## Developer
 Developed by Sam
 
-<img src="https://github.com/SAMMYBOOOOM/mavlink-view-exporter/blob/master/image/dev.png" width="100">
+<img src="https://github.com/SAMMYBOOOOM/mavlink-view-exporter/blob/main/image/dev.png" width="100">
 
 ## Contributing
 Contributions are welcome! Please fork the repository and submit pull requests. For major changes, please open an issue first to discuss proposed changes.
