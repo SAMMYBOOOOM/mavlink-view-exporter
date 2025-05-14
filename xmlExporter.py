@@ -3,6 +3,9 @@ from tkinter import ttk, filedialog, messagebox
 from pymavlink import mavutil
 import xml.etree.ElementTree as ET
 import os
+import json
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 class XmlExporterGUI:
     _instance = None
@@ -17,7 +20,7 @@ class XmlExporterGUI:
             self.initialized = True
             self.master = master if master else tk.Toplevel()
             self.master.title("XML Exporter")
-            self.master.geometry("500x600")
+            self.master.geometry("600x600")
             self.master.protocol("WM_DELETE_WINDOW", self._on_close)
             
             self.log_file = None
@@ -92,14 +95,33 @@ class XmlExporterGUI:
 
         ttk.Button(
             btn_frame, 
-            text="Reload Log", 
-            command=self.reload_log
+            text="Reupload Log", 
+            command=self.upload_new_log
         ).pack(side=tk.LEFT, padx=5)
 
         ttk.Button(
             btn_frame,
             text="Clear Selection",
             command=self.clear_selection
+        ).pack(side=tk.LEFT, padx=5)
+
+        # New buttons
+        ttk.Button(
+            btn_frame,
+            text="Preview",
+            command=self.show_preview
+        ).pack(side=tk.LEFT, padx=5)
+
+        ttk.Button(
+            btn_frame,
+            text="Export Favorite",
+            command=self.export_favorite
+        ).pack(side=tk.LEFT, padx=5)
+
+        ttk.Button(
+            btn_frame,
+            text="Import Favorite",
+            command=self.import_favorite
         ).pack(side=tk.LEFT, padx=5)
 
         self.tree.tag_configure('checked', image=self.create_checkmark())
@@ -126,24 +148,24 @@ class XmlExporterGUI:
             return
 
         # Get the full path to this item
-        msg_type = self.tree.parent(item)
-        if not msg_type:  # Clicked on message type
-            return
+        field_node = item
+        instance_node = self.tree.parent(field_node)
+        msg_type_node = self.tree.parent(instance_node)
         
-        msg_id = self.tree.parent(msg_type)
-        if not msg_id:  # Clicked on instance ID
+        if not msg_type_node:  # Invalid structure
             return
 
-        # This must be a field
-        field = self.tree.item(item)['text']
-        full_path = f"{self.tree.item(msg_id)['text']}/{self.tree.item(msg_type)['text']}/{field}"
+        msg_type = self.tree.item(msg_type_node)['text']
+        instance_id = self.tree.item(instance_node)['text']
+        field = self.tree.item(field_node)['text']
+        full_path = f"{msg_type}/{instance_id}/{field}"
 
         if full_path in self.selected_fields:
             self.selected_fields.remove(full_path)
-            self.tree.item(item, tags=('unchecked',))
+            self.tree.item(field_node, tags=('unchecked',))
         else:
             self.selected_fields.add(full_path)
-            self.tree.item(item, tags=('checked',))
+            self.tree.item(field_node, tags=('checked',))
 
         self.update_selected_listbox()
         self.export_btn['state'] = tk.NORMAL if self.selected_fields else tk.DISABLED
@@ -171,14 +193,18 @@ class XmlExporterGUI:
             self.parse_log_file()
             self.populate_tree()
 
-    def reload_log(self):
-        if self.log_file and os.path.exists(self.log_file):
+    def upload_new_log(self):
+        new_file = filedialog.askopenfilename(
+            title="Select New MAVLink log file",
+            filetypes=(("TLOG files", "*.tlog"), ("All files", "*.*"))
+        )
+        if new_file:
+            self.log_file = new_file
             self.parse_log_file()
             self.populate_tree()
-            messagebox.showinfo("Info", "Log file reloaded successfully")
+            messagebox.showinfo("Info", "New log file loaded successfully")
 
     def parse_log_file(self):
-        # [Previous parse_log_file implementation remains the same]
         self.message_data.clear()
         mlog = mavutil.mavlink_connection(self.log_file)
         start_time = None
@@ -226,14 +252,42 @@ class XmlExporterGUI:
     def populate_tree(self):
         self.tree.delete(*self.tree.get_children())
         
-        for msg_id in sorted(self.message_data.keys()):
-            id_node = self.tree.insert('', 'end', text=msg_id)
+        for msg_type in sorted(self.message_data.keys()):
+            msg_type_node = self.tree.insert('', 'end', text=msg_type)
             
-            for instance_id, data in sorted(self.message_data[msg_id].items(), key=lambda x: int(x[0])):
-                instance_node = self.tree.insert(id_node, 'end', text=instance_id)
+            for instance_id, data in sorted(self.message_data[msg_type].items(), key=lambda x: int(x[0])):
+                instance_node = self.tree.insert(msg_type_node, 'end', text=instance_id)
                 
                 for field in sorted(data['data'].keys()):
                     self.tree.insert(instance_node, 'end', text=field, tags=('unchecked',))
+
+        # Validate selected fields against current data
+        valid_paths = set()
+        for msg_type_node in self.tree.get_children():
+            msg_type = self.tree.item(msg_type_node)['text']
+            for instance_node in self.tree.get_children(msg_type_node):
+                instance_id = self.tree.item(instance_node)['text']
+                for field_node in self.tree.get_children(instance_node):
+                    field = self.tree.item(field_node)['text']
+                    valid_paths.add(f"{msg_type}/{instance_id}/{field}")
+
+        # Update selected fields and checkboxes
+        self.selected_fields = {path for path in self.selected_fields if path in valid_paths}
+        for path in self.selected_fields:
+            msg_type, instance_id, field = path.split('/')
+            for msg_type_node in self.tree.get_children():
+                if self.tree.item(msg_type_node)['text'] == msg_type:
+                    for instance_node in self.tree.get_children(msg_type_node):
+                        if self.tree.item(instance_node)['text'] == instance_id:
+                            for field_node in self.tree.get_children(instance_node):
+                                if self.tree.item(field_node)['text'] == field:
+                                    self.tree.item(field_node, tags=('checked',))
+                                    break
+                            break
+                    break
+        
+        self.update_selected_listbox()
+        self.export_btn['state'] = tk.NORMAL if self.selected_fields else tk.DISABLED
 
     def export_xml(self):
         if not self.selected_fields:
@@ -248,22 +302,18 @@ class XmlExporterGUI:
         if not file_path:
             return
         
-        # Create XML structure
         root = ET.Element("MAVLinkData")
-        
-        # Parse selected fields and gather data
         field_data = {}
         min_length = float('inf')
         
-        for full_path in self.selected_fields:
-            msg_id, msg_type, field = full_path.split('/')
-            data = self.message_data[msg_id][msg_type]
+        for path in self.selected_fields:
+            msg_type, instance_id, field = path.split('/')
+            data = self.message_data[msg_type][instance_id]
             times = data['times']
             values = data['data'][field]
             field_data[field] = values
             min_length = min(min_length, len(times))
         
-        # Create records
         for i in range(min_length):
             record = ET.SubElement(root, "Record")
             ET.SubElement(record, "Time").text = f"{int(data['times'][i])}"
@@ -274,6 +324,164 @@ class XmlExporterGUI:
         tree = ET.ElementTree(root)
         tree.write(file_path, encoding='utf-8', xml_declaration=True)
         messagebox.showinfo("Success", f"XML exported to:\n{file_path}")
+
+    def show_preview(self):
+        if not self.selected_fields:
+            messagebox.showwarning("No Selection", "Please select fields to preview.")
+            return
+
+        # Create preview window
+        preview_win = tk.Toplevel(self.master)
+        preview_win.title("Data Preview")
+        preview_win.geometry("1000x800")
+        
+        # Configure grid layout
+        preview_win.grid_rowconfigure(1, weight=1)
+        preview_win.grid_columnconfigure(0, weight=1)
+
+        # Navigation Frame
+        nav_frame = ttk.Frame(preview_win)
+        nav_frame.grid(row=0, column=0, sticky='ew', pady=5)
+        nav_frame.grid_columnconfigure(1, weight=1)
+
+        prev_button = ttk.Button(nav_frame, text="Previous", command=lambda: prev_page())
+        page_label = ttk.Label(nav_frame, text="Page 1/1")
+        next_button = ttk.Button(nav_frame, text="Next", command=lambda: next_page())
+
+        prev_button.grid(row=0, column=0, padx=5)
+        page_label.grid(row=0, column=1)
+        next_button.grid(row=0, column=2, padx=5)
+
+        # Matplotlib Figure
+        fig = plt.Figure(figsize=(10, 6), dpi=100)
+        canvas = FigureCanvasTkAgg(fig, master=preview_win)
+        canvas.get_tk_widget().grid(row=1, column=0, sticky='nsew')
+
+        # Data preparation
+        plot_data = []
+        for path in self.selected_fields:
+            msg_type, instance_id, field = path.split('/')
+            data = self.message_data[msg_type][instance_id]
+            times = data['times']
+            values = data['data'][field]
+            if len(times) == len(values):
+                plot_data.append({
+                    'times': times,
+                    'values': values,
+                    'title': f"{msg_type} (ID {instance_id})\n{field}"
+                })
+
+        # Pagination variables
+        grid_rows = 3
+        grid_cols = 3
+        plots_per_page = grid_rows * grid_cols
+        total_pages = (len(plot_data) + plots_per_page - 1) // plots_per_page
+        current_page = 0
+
+        def plot_page():
+            nonlocal current_page
+            fig.clear()
+            start_idx = current_page * plots_per_page
+            end_idx = min(start_idx + plots_per_page, len(plot_data))
+            current_plots = plot_data[start_idx:end_idx]
+
+            for i, plot in enumerate(current_plots):
+                ax = fig.add_subplot(grid_rows, grid_cols, i+1)
+                ax.plot(plot['times'], plot['values'], 'b-')
+                ax.set_title(plot['title'], fontsize=8)
+                ax.set_xlabel("Time (s)", fontsize=6)
+                ax.grid(True)
+                ax.tick_params(labelsize=6)
+                ax.format_coord = lambda x, y: f'Time: {x:.2f}s, Value: {y:.2f}'
+
+            fig.tight_layout()
+            canvas.draw()
+            page_label.config(text=f"Page {current_page+1}/{total_pages}")
+            prev_button["state"] = "normal" if current_page > 0 else "disabled"
+            next_button["state"] = "normal" if current_page < total_pages-1 else "disabled"
+
+        def prev_page():
+            nonlocal current_page
+            if current_page > 0:
+                current_page -= 1
+                plot_page()
+
+        def next_page():
+            nonlocal current_page
+            if current_page < total_pages - 1:
+                current_page += 1
+                plot_page()
+
+        # Initial plot
+        plot_page()
+        if total_pages <= 1:
+            prev_button.grid_remove()
+            page_label.grid_remove()
+            next_button.grid_remove()
+
+        # Cursor coordinates
+        def update_cursor(event):
+            if event.inaxes:
+                x, y = event.xdata, event.ydata
+                if x and y:
+                    preview_win.cursor_label.config(text=f'Time: {x:.2f}s, Value: {y:.2f}')
+            else:
+                preview_win.cursor_label.config(text="")
+
+        preview_win.cursor_label = ttk.Label(preview_win, text="")
+        preview_win.cursor_label.grid(row=2, column=0, sticky='se', padx=10, pady=5)
+        canvas.mpl_connect('motion_notify_event', update_cursor)
+    
+    def export_favorite(self):
+        if not self.selected_fields:
+            messagebox.showwarning("No Selection", "No fields selected to export as favorite.")
+            return
+        
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".json",
+            filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")],
+            title="Save Favorite"
+        )
+        if not file_path:
+            return
+        
+        try:
+            with open(file_path, 'w') as f:
+                json.dump(list(self.selected_fields), f)
+            messagebox.showinfo("Success", "Favorite exported successfully.")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to export favorite: {str(e)}")
+
+    def import_favorite(self):
+        file_path = filedialog.askopenfilename(
+            title="Select Favorite File",
+            filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")]
+        )
+        if not file_path:
+            return
+        
+        try:
+            with open(file_path, 'r') as f:
+                favorite = json.load(f)
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load favorite: {str(e)}")
+            return
+        
+        # Validate paths against current data
+        valid_paths = set()
+        for path in favorite:
+            parts = path.split('/')
+            if len(parts) != 3:
+                continue
+            msg_type, instance_id, field = parts
+            if msg_type in self.message_data:
+                if instance_id in self.message_data[msg_type]:
+                    if field in self.message_data[msg_type][instance_id]['data']:
+                        valid_paths.add(path)
+        
+        self.selected_fields = valid_paths
+        self.populate_tree()  # Refresh tree and update selections
+        messagebox.showinfo("Success", f"Imported {len(valid_paths)} valid fields.")
 
 def open_xml_exporter():
     if XmlExporterGUI._instance is None:

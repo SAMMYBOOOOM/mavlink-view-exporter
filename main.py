@@ -12,12 +12,13 @@ def resource_path(relative_path):
         base_path = sys._MEIPASS
     except Exception:
         base_path = os.path.abspath(".")
+
     return os.path.join(base_path, relative_path)
 
 class MavlinkLauncherGUI:
     def __init__(self, master):
         self.master = master
-        master.title("MAVLink Data Plotter (demo 0.3)")
+        master.title("MAVLink Data Plotter (version 1.1)")
         master.geometry("350x200")
         master.grid_rowconfigure(0, weight=1)
         master.grid_columnconfigure(0, weight=1)
